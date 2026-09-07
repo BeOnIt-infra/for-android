@@ -41,6 +41,10 @@ import chat.stoat.R
 import chat.stoat.StoatApplication
 import chat.stoat.api.routes.account.RegistrationBody
 import chat.stoat.api.routes.account.register
+import chat.stoat.api.StoatAPI
+import chat.stoat.api.routes.account.negotiateAuthentication
+import chat.stoat.api.routes.onboard.needsOnboarding
+import chat.stoat.persistence.KVStorage
 import chat.stoat.api.routes.misc.getRootRoute
 import chat.stoat.composables.generic.FormTextField
 import com.hcaptcha.sdk.HCaptcha
@@ -104,7 +108,46 @@ class RegisterDetailsScreenViewModel : ViewModel() {
             val result = register(body)
 
             if (result.ok) {
-                navController.navigate("register/verify/$email")
+                val root = try {
+                    getRootRoute()
+                } catch (e: Exception) {
+                    null
+                }
+
+                if (root?.features?.email == true) {
+                    navController.navigate("register/verify/$email")
+                } else {
+                    // Email verification disabled on server (Be On It deployment)
+                    // Auto-login and continue straight to onboarding / workspace!
+                    try {
+                        val auth = negotiateAuthentication(email, password)
+                        if (auth.firstUserHints != null) {
+                            val token = auth.firstUserHints.token
+                            val id = auth.firstUserHints.id
+                            val kvStorage = KVStorage(StoatApplication.instance)
+
+                            kvStorage.set("sessionToken", token)
+                            kvStorage.set("sessionId", id)
+
+                            val onboard = needsOnboarding(token)
+                            if (onboard) {
+                                navController.navigate("register/onboarding") {
+                                    popUpTo("register/greeting") { inclusive = true }
+                                }
+                            } else {
+                                StoatAPI.loginAs(token)
+                                StoatAPI.setSessionId(token)
+                                navController.navigate("chat") {
+                                    popUpTo("register/greeting") { inclusive = true }
+                                }
+                            }
+                        } else {
+                            navController.navigate("login")
+                        }
+                    } catch (e: Exception) {
+                        navController.navigate("login")
+                    }
+                }
             } else {
                 error = result.unwrapError().type
             }
