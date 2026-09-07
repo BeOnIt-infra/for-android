@@ -727,6 +727,7 @@
     <string name="voice_notification_ongoing_call">Connected to voice</string>
     <string name="voice_banner_tap_to_return">Tap to return to the call</string>
     <string name="voice_start_call">Start a call</string>
+    <string name="client_call_start">Start a client call (shareable link, no account needed)</string>
     <string name="voice_notification_fallback_channel_name">Voice channel</string>
 
     <string name="spark_notifications_rationale">Stay in the loop</string>

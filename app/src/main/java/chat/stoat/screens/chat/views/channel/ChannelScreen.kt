@@ -3,6 +3,7 @@ package chat.stoat.screens.chat.views.channel
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ContentValues
+import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Environment
@@ -790,6 +791,25 @@ fun ChannelScreen(
                         }
                     },
                     actions = {
+                        // Be On It: standalone client-call link (shareable, no account needed).
+                        // Mirrors the web ChannelHeader "Start a client call" button.
+                        if (viewModel.channel?.channelType == ChannelType.TextChannel ||
+                            viewModel.channel?.channelType == ChannelType.Group
+                        ) {
+                            IconButton(onClick = {
+                                context.startActivity(
+                                    Intent(
+                                        Intent.ACTION_VIEW,
+                                        Uri.parse("https://call.178.104.95.94.nip.io")
+                                    )
+                                )
+                            }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_videocam_24dp),
+                                    contentDescription = stringResource(id = R.string.client_call_start)
+                                )
+                            }
+                        }
                         val isDmLike =
                             viewModel.channel?.channelType == ChannelType.DirectMessage ||
                                     viewModel.channel?.channelType == ChannelType.Group
