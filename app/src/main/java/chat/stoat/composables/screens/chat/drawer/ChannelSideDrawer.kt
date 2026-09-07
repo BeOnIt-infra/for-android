@@ -446,41 +446,9 @@ fun ChannelSideDrawer(
                 }
             }
 
-            item(key = "add_server") {
-                Box(
-                    Modifier
-                        .padding(8.dp)
-                        .clip(CircleShape)
-                        .clickable {
-                            onShowAddServerSheet()
-                        }
-                        .size(48.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_add_24dp),
-                        contentDescription = stringResource(R.string.server_plus_alt)
-                    )
-                }
-            }
+// add_server hidden for single workspace
 
-            item(key = "discover") {
-                Box(
-                    Modifier
-                        .padding(8.dp)
-                        .clip(CircleShape)
-                        .clickable {
-                            topNav.navigate("discover")
-                        }
-                        .size(48.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_explore_24dp),
-                        contentDescription = stringResource(R.string.discover_alt)
-                    )
-                }
-            }
+// discover hidden for single workspace
 
             if (showSettingsIcon) {
                 item(key = "settings") {

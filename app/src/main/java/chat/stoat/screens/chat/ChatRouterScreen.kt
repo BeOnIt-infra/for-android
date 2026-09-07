@@ -407,6 +407,17 @@ fun ChatRouterScreen(
         }
     }
 
+    // Auto-land on the company server on initial launch if on Overview
+    LaunchedEffect(StoatAPI.serverCache.size) {
+        if (viewModel.currentDestination is ChatRouterDestination.Overview) {
+            val companyServer = StoatAPI.serverCache.values.firstOrNull()
+            val targetChannel = companyServer?.channels?.firstOrNull()
+            if (targetChannel != null) {
+                viewModel.setSaveDestination(ChatRouterDestination.Channel(targetChannel))
+            }
+        }
+    }
+
     val currentServer = remember(viewModel.currentDestination) {
         when (viewModel.currentDestination) {
             is ChatRouterDestination.Channel -> {

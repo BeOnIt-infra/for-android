@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name" translatable="false">Stoat</string>
+    <string name="app_name" translatable="false">Be On It</string>
 
     <string name="back">← Back</string>
     <string name="next">Next →</string>
@@ -47,7 +47,7 @@
     <string name="password_forgot_heading">Forgot your password?</string>
     <string name="password_forgot_instructions">Enter your email and we\'ll send you instructions on how to reset your password.</string>
 
-    <string name="register_heading">Welcome to Stoat</string>
+    <string name="register_heading">Welcome to Be On It</string>
     <string name="register_image_alt">Use Stoat to chat about stuff.</string>
     <string name="register_instructions">It\'s like a place to hang out, get together, and talk about stuff. Best part, it\'s on the internet.</string>
     <string name="register_form_heading">Let\'s get you set up.</string>
@@ -104,7 +104,7 @@
     <string name="mfa_error_generic">Something went wrong (%1$s).</string>
 
     <string name="about">About</string>
-    <string name="about_full_name">Stoat for Android</string>
+    <string name="about_full_name">Be On It for Android</string>
     <string name="about_brought_to_you_by">Brought to you with ❤️ by the Stoat team.</string>
     <string name="about_section_debug_information">Debug Information</string>
     <string name="about_section_debug_information_description">If you\'re experiencing issues with the app, this information may be helpful to include when contacting support or submitting a bug report.</string>
