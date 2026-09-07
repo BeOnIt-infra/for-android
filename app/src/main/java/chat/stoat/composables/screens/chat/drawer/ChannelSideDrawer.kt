@@ -83,6 +83,8 @@ import chat.stoat.api.internals.ChannelUtils
 import chat.stoat.api.internals.DirectMessages
 import chat.stoat.api.internals.FriendRequests
 import chat.stoat.api.routes.user.addUserIfUnknown
+import chat.stoat.api.routes.user.openDM
+import chat.stoat.api.routes.server.fetchMembers
 import chat.stoat.api.settings.GeoStateProvider
 import chat.stoat.api.settings.NotificationSettingsProvider
 import chat.stoat.api.settings.SyncedSettings
@@ -624,6 +626,17 @@ fun ColumnScope.DirectMessagesChannelListRenderer(
     onOpenChannelContextSheet: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val serverIds = StoatAPI.serverCache.keys.toList()
+    LaunchedEffect(serverIds) {
+        for (sid in serverIds) {
+            try {
+                fetchMembers(sid, includeOffline = true)
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+    }
+
     val dmAbleChannels =
         StoatAPI.channelCache.values
             .filter { it.channelType == ChannelType.DirectMessage || it.channelType == ChannelType.Group }
@@ -637,47 +650,9 @@ fun ColumnScope.DirectMessagesChannelListRenderer(
             .fillMaxSize()
             .weight(1f)
     ) {
-        item(key = "overview") {
-            ChannelItem(
-                channel = Channel(
-                    id = "overview",
-                    name = stringResource(R.string.overview_screen_title),
-                    channelType = ChannelType.TextChannel
-                ),
-                iconType = ChannelItemIconType.Painter(painterResource(R.drawable.ic_star_shine_24dp)),
-                isCurrent = currentDestination is ChatRouterDestination.Overview,
-                onDestinationChanged = {
-                    onDestinationChanged(ChatRouterDestination.Overview)
-                    scope.launch {
-                        drawerState?.close()
-                    }
-                },
-                hasUnread = false,
-                onOpenChannelContextSheet = {}
-            )
-            Spacer(Modifier.height(4.dp))
-        }
+// overview item hidden for company workspace
 
-        item(key = "friends") {
-            ChannelItem(
-                channel = Channel(
-                    id = "friends",
-                    name = stringResource(R.string.friends),
-                    channelType = ChannelType.TextChannel
-                ),
-                iconType = ChannelItemIconType.Painter(painterResource(R.drawable.ic_group_24dp)),
-                isCurrent = currentDestination is ChatRouterDestination.Friends,
-                onDestinationChanged = {
-                    onDestinationChanged(ChatRouterDestination.Friends)
-                    scope.launch {
-                        drawerState?.close()
-                    }
-                },
-                hasUnread = FriendRequests.getIncoming().isNotEmpty(),
-                onOpenChannelContextSheet = {},
-            )
-            Spacer(Modifier.height(4.dp))
-        }
+// friends item hidden for company workspace
 
         item(key = "saved_messages") {
             val notesChannel =
@@ -757,6 +732,67 @@ fun ColumnScope.DirectMessagesChannelListRenderer(
                 },
                 onOpenChannelContextSheet = onOpenChannelContextSheet
             )
+        }
+
+        val existingDMPartners = dmAbleChannels.mapNotNull {
+            if (it.channelType == ChannelType.DirectMessage) ChannelUtils.resolveDMPartner(it) else null
+        }.toSet()
+
+        val otherColleagues = StoatAPI.userCache.values
+            .filter { it.id != null && it.id != StoatAPI.selfId && !existingDMPartners.contains(it.id) && it.bot == null }
+            .sortedBy { User.resolveDefaultName(it).lowercase() }
+
+        if (otherColleagues.isNotEmpty()) {
+            item(key = "colleagues_divider") {
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+                Text(
+                    text = stringResource(R.string.channel_info_sheet_options_members),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
+            }
+
+            items(
+                otherColleagues.size,
+                key = { "colleague_${otherColleagues[it].id}" }
+            ) {
+                val colleague = otherColleagues[it]
+                DMOrGroupItem(
+                    channel = Channel(
+                        id = colleague.id,
+                        name = User.resolveDefaultName(colleague),
+                        channelType = ChannelType.DirectMessage
+                    ),
+                    partner = colleague,
+                    isCurrent = false,
+                    hasUnread = false,
+                    isMuted = false,
+                    onDestinationChanged = {
+                        scope.launch {
+                            try {
+                                val opened = openDM(colleague.id!!)
+                                val openedId = opened.id
+                                if (openedId != null) {
+                                    if (StoatAPI.channelCache[openedId] == null)
+                                        StoatAPI.channelCache[openedId] = opened
+                                    onDestinationChanged(ChatRouterDestination.Channel(openedId))
+                                    drawerState?.close()
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("ChannelSideDrawer", "Failed to open DM", e)
+                            }
+                        }
+                    },
+                    onOpenChannelContextSheet = {}
+                )
+            }
         }
 
         item(key = "last") {

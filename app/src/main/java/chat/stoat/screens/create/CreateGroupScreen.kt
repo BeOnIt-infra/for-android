@@ -64,18 +64,16 @@ class CreateGroupScreenViewModel : ViewModel() {
 
     fun filterFriends() {
         friendsFilteredBySearch.clear()
-        friendsFilteredBySearch.addAll(FriendRequests.getFriends().filter {
+        val colleagues = StoatAPI.userCache.values.filter {
+            it.id != null && it.id != StoatAPI.selfId && it.bot == null
+        }
+        friendsFilteredBySearch.addAll(colleagues.filter {
             if (friendSearchQuery.isBlank()) {
                 return@filter true
             }
-
-            if (it.displayName == null || it.username == null) {
-                return@filter false
-            }
-
-            it.displayName!!.contains(friendSearchQuery, ignoreCase = true) ||
-                    it.username!!.contains(friendSearchQuery, ignoreCase = true)
-        }.map { it.id!! })
+            val name = it.displayName ?: it.username ?: ""
+            name.contains(friendSearchQuery, ignoreCase = true)
+        }.sortedBy { (it.displayName ?: it.username ?: "").lowercase() }.map { it.id!! })
     }
 
     fun createGroup(popBackStack: () -> Unit) {

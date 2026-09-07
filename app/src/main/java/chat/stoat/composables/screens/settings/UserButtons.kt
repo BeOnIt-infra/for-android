@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -33,12 +34,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import chat.stoat.R
 import chat.stoat.api.StoatAPI
-import chat.stoat.api.routes.user.acceptFriendRequest
 import chat.stoat.api.routes.user.blockUser
-import chat.stoat.api.routes.user.friendUser
 import chat.stoat.api.routes.user.openDM
 import chat.stoat.api.routes.user.unblockUser
-import chat.stoat.api.routes.user.unfriendUser
 import chat.stoat.callbacks.Action
 import chat.stoat.callbacks.ActionChannel
 import chat.stoat.core.model.schemas.User
@@ -60,227 +58,103 @@ fun UserButtons(
     var botEasterEgg by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
-    if (user.id == null) return Row {
-        Button(
-            onClick = {
-                scope.launch {
-                    try {
-                        friendUser("${user.username}#${user.discriminator}")
-                    } catch (e: Exception) {
-                        // Button did nothing, but not an error
-                        if (e.message == "NoEffect") return@launch
+    if (user.id == null) return
 
-                        // Log all other errors
-                        logcat(LogPriority.ERROR) { e.asLog() }
-                    }
-                }
-            },
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(stringResource(R.string.user_info_sheet_add_friend))
-        }
-    }
+    val isSelf = user.id == StoatAPI.selfId || user.relationship == "User"
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        when (user.relationship) {
-            "None" -> {
-                if (user.bot == null) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                try {
-                                    friendUser("${user.username}#${user.discriminator}")
-                                } catch (e: Exception) {
-                                    if (e.message == "NoEffect") return@launch
-                                    logcat(LogPriority.ERROR) { e.asLog() }
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(stringResource(R.string.user_info_sheet_add_friend))
+        if (isSelf) {
+            Button(
+                onClick = {
+                    scope.launch {
+                        ActionChannel.send(Action.TopNavigate("settings/profile"))
+                        dismissSheet()
                     }
-                } else {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(
-                            8.dp,
-                            alignment = Alignment.Start
-                        ),
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .animateContentSize()
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable { botEasterEgg = true }
-                            .padding(8.dp)
-                            .weight(1f)
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_smart_toy_24dp),
-                            contentDescription = null
-                        )
-                        Text(
-                            if (botEasterEgg) {
-                                stringResource(R.string.user_info_sheet_user_is_bot_easter_egg)
-                            } else {
-                                stringResource(R.string.user_info_sheet_user_is_bot)
-                            },
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(R.string.user_info_sheet_edit_profile))
             }
-
-            "User" -> {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            ActionChannel.send(Action.TopNavigate("settings/profile"))
-                            // We must now close the bottom sheet,
-                            // else we will crash if we try to open this sheet again
+        } else if (user.relationship == "Blocked") {
+            Button(
+                onClick = {
+                    scope.launch {
+                        try {
+                            unblockUser(user.id!!)
+                        } catch (e: Exception) {
+                            if (e.message == "NoEffect") return@launch
+                            logcat(LogPriority.ERROR) { e.asLog() }
+                        }
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(R.string.user_info_sheet_unblock))
+            }
+        } else if (user.bot != null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(
+                    8.dp,
+                    alignment = Alignment.Start
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .animateContentSize()
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable { botEasterEgg = true }
+                    .padding(8.dp)
+                    .weight(1f)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_smart_toy_24dp),
+                    contentDescription = null
+                )
+                Text(
+                    if (botEasterEgg) {
+                        stringResource(R.string.user_info_sheet_user_is_bot_easter_egg)
+                    } else {
+                        stringResource(R.string.user_info_sheet_user_is_bot)
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        } else {
+            // Direct Message button for all colleagues in company workspace
+            FilledTonalButton(
+                onClick = {
+                    scope.launch {
+                        val dm = openDM(user.id!!)
+                        if (dm.id != null) {
+                            if (StoatAPI.channelCache[dm.id] == null)
+                                StoatAPI.channelCache[dm.id!!] = dm
+                            ActionChannel.send(Action.SwitchChannel(dm.id!!))
                             dismissSheet()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.user_info_sheet_failed_to_open_dm),
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(stringResource(R.string.user_info_sheet_edit_profile))
-                }
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(R.string.user_info_sheet_send_message))
             }
-
-            "Friend" -> {
-                FilledTonalButton(
-                    onClick = {
-                        scope.launch {
-                            val dm = openDM(user.id!!)
-                            if (dm.id != null) {
-                                if (StoatAPI.channelCache[dm.id] == null)
-                                    StoatAPI.channelCache[dm.id!!] = dm
-                                ActionChannel.send(Action.SwitchChannel(dm.id!!))
-                                dismissSheet()
-                            } else {
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.user_info_sheet_failed_to_open_dm),
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(stringResource(R.string.user_info_sheet_send_message))
-                }
-                // Remove friend (in overflow menu)
-            }
-
-            "Outgoing" -> {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                unfriendUser(user.id!!)
-                            } catch (e: Exception) {
-                                if (e.message == "NoEffect") return@launch
-                                logcat(LogPriority.ERROR) { e.asLog() }
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(stringResource(R.string.user_info_sheet_cancel_request))
-                }
-            }
-
-            "Incoming" -> {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                acceptFriendRequest(user.id!!)
-                            } catch (e: Exception) {
-                                if (e.message == "NoEffect") return@launch
-                                logcat(LogPriority.ERROR) { e.asLog() }
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(stringResource(R.string.user_info_sheet_accept_request))
-                }
-                Button(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                unfriendUser(user.id!!)
-                            } catch (e: Exception) {
-                                if (e.message == "NoEffect") return@launch
-                                logcat(LogPriority.ERROR) { e.asLog() }
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(stringResource(R.string.user_info_sheet_decline_request))
-                }
-            }
-
-            "Blocked" -> {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                unblockUser(user.id!!)
-                            } catch (e: Exception) {
-                                if (e.message == "NoEffect") return@launch
-                                logcat(LogPriority.ERROR) { e.asLog() }
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(stringResource(R.string.user_info_sheet_unblock))
-                }
-            }
-
-            "BlockedOther" -> Box(Modifier.weight(1f))
         }
 
-        if (user.relationship != "User") {
-            Row { // Prevent the dropdown menu from counting towards arrangement spacing
+        if (!isSelf) {
+            Row {
                 DropdownMenu(
                     expanded = menuOpen,
                     onDismissRequest = { menuOpen = false }
                 ) {
-                    when (user.relationship) {
-                        "Friend" -> {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(stringResource(R.string.user_info_sheet_remove_friend))
-                                },
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            unfriendUser(user.id!!)
-                                        } catch (e: Exception) {
-                                            if (e.message == "NoEffect") return@launch
-                                            logcat(LogPriority.ERROR) { e.asLog() }
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                    }
-
-                    when (user.relationship) {
-                        "Blocked" -> {}
-
-                        else -> DropdownMenuItem(
+                    if (user.relationship != "Blocked") {
+                        DropdownMenuItem(
                             text = {
                                 Text(stringResource(R.string.user_info_sheet_block))
                             },
