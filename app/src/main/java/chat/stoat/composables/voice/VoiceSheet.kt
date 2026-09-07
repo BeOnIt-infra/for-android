@@ -182,6 +182,13 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                     scaleType = ScaleType.FitInside,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                // Be On It: draw / laser overlay on screen shares
+                                if (trackRef.source == Track.Source.SCREEN_SHARE) {
+                                    ScreenShareAnnotationOverlay(
+                                        room = room,
+                                        modifier = Modifier.matchParentSize()
+                                    )
+                                }
                                 Surface(
                                     color = MaterialTheme.colorScheme.surfaceContainer.copy(
                                         alpha = 0.85f
