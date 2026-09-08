@@ -41,6 +41,13 @@ import chat.stoat.R
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.DataPublishReliability
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableIntStateOf
+import io.livekit.android.compose.types.TrackReference
+import io.livekit.android.room.track.VideoTrack
+import livekit.org.webrtc.VideoFrame
+import livekit.org.webrtc.VideoSink
+
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.abs
@@ -72,12 +79,59 @@ private fun parseColor(hex: String): Color =
         Color.Red
     }
 
+private data class VideoContentRect(val left: Float, val top: Float, val width: Float, val height: Float)
+
+private fun calculateVideoContentRect(cw: Float, ch: Float, vw: Int, vh: Int): VideoContentRect {
+    if (cw <= 0f || ch <= 0f) return VideoContentRect(0f, 0f, cw, ch)
+    val vWidth = if (vw > 0) vw.toFloat() else 16f
+    val vHeight = if (vh > 0) vh.toFloat() else 9f
+    val containerAspect = cw / ch
+    val videoAspect = vWidth / vHeight
+
+    return if (videoAspect > containerAspect) {
+        // Video is wider than container -> letterbox on top & bottom
+        val w = cw
+        val h = cw / videoAspect
+        val top = (ch - h) / 2f
+        VideoContentRect(0f, top, w, h)
+    } else {
+        // Video is taller than container -> pillarbox on left & right
+        val h = ch
+        val w = ch * videoAspect
+        val left = (cw - w) / 2f
+        VideoContentRect(left, 0f, w, h)
+    }
+}
+
 @Composable
 fun ScreenShareAnnotationOverlay(
     room: Room,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    trackRef: TrackReference? = null,
 ) {
     val scope = rememberCoroutineScope()
+
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
+
+    val videoTrack = trackRef?.publication?.track as? VideoTrack
+    DisposableEffect(videoTrack) {
+        if (videoTrack == null) return@DisposableEffect onDispose { }
+        val sink = object : VideoSink {
+            override fun onFrame(frame: VideoFrame) {
+                val w = frame.rotatedWidth
+                val h = frame.rotatedHeight
+                if (w > 0 && h > 0 && (w != videoWidth || h != videoHeight)) {
+                    videoWidth = w
+                    videoHeight = h
+                }
+            }
+        }
+        videoTrack.addRenderer(sink)
+        onDispose {
+            videoTrack.removeRenderer(sink)
+        }
+    }
 
     var strokes by remember { mutableStateOf<List<PenStroke>>(emptyList()) }
     var lasers by remember { mutableStateOf<Map<String, Laser>>(emptyMap()) }
@@ -192,8 +246,9 @@ fun ScreenShareAnnotationOverlay(
                     val w = size.width.toFloat()
                     val h = size.height.toFloat()
                     if (w <= 0f || h <= 0f) return@awaitEachGesture
-                    fun nx(o: Offset) = (o.x / w).coerceIn(0f, 1f)
-                    fun ny(o: Offset) = (o.y / h).coerceIn(0f, 1f)
+                    val vRect = calculateVideoContentRect(w, h, videoWidth, videoHeight)
+                    fun nx(o: Offset) = if (vRect.width > 0f) ((o.x - vRect.left) / vRect.width).coerceIn(0f, 1f) else 0f
+                    fun ny(o: Offset) = if (vRect.height > 0f) ((o.y - vRect.top) / vRect.height).coerceIn(0f, 1f) else 0f
                     down.consume()
 
                     if (tool == Tool.Pen) {
@@ -241,14 +296,15 @@ fun ScreenShareAnnotationOverlay(
         Canvas(modifier = Modifier.fillMaxSize().then(drawModifier)) {
             val w = size.width
             val h = size.height
+            val vRect = calculateVideoContentRect(w, h, videoWidth, videoHeight)
             val strokePx = 3.dp.toPx()
 
             for (s in strokes) {
                 if (s.points.size < 2) continue
                 val path = Path()
                 s.points.forEachIndexed { i, p ->
-                    val x = p.x * w
-                    val y = p.y * h
+                    val x = vRect.left + p.x * vRect.width
+                    val y = vRect.top + p.y * vRect.height
                     if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
                 drawPath(
@@ -267,7 +323,7 @@ fun ScreenShareAnnotationOverlay(
                     drawCircle(
                         color = parseColor(l.color).copy(alpha = alpha),
                         radius = (5f * alpha + 3f).dp.toPx(),
-                        center = Offset(p.x * w, p.y * h),
+                        center = Offset(vRect.left + p.x * vRect.width, vRect.top + p.y * vRect.height),
                     )
                 }
             }

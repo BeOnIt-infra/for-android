@@ -2,6 +2,9 @@ package chat.stoat.composables.voice
 
 import android.app.Activity
 import android.media.projection.MediaProjectionManager
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -110,6 +113,13 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
         val trackRefs by rememberTracks(passedRoom = room)
         val isDeafened = VoiceCallManager.isDeafened
 
+        DisposableEffect(room, isScreenShared) {
+            if (isScreenShared) ScreenSharePresenterOverlay.start(context, room)
+            onDispose {
+                if (isScreenShared) ScreenSharePresenterOverlay.stop()
+            }
+        }
+
         val audioHandler = room.audioSwitchHandler
         var audioDevices by remember {
             mutableStateOf(audioHandler?.availableAudioDevices ?: emptyList())
@@ -186,6 +196,7 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                 if (trackRef.source == Track.Source.SCREEN_SHARE) {
                                     ScreenShareAnnotationOverlay(
                                         room = room,
+                                        trackRef = trackRef,
                                         modifier = Modifier.matchParentSize()
                                     )
                                 }
@@ -356,6 +367,17 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                 }
             }
 
+            val overlayPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult()
+            ) {
+                if (Settings.canDrawOverlays(context)) {
+                    context.getSystemService(MediaProjectionManager::class.java)
+                        ?.let { manager ->
+                            screenCaptureLauncher.launch(manager.createScreenCaptureIntent())
+                        }
+                }
+            }
+
             var toolbarExpanded by remember { mutableStateOf(false) }
             var outputMenuOpen by remember { mutableStateOf(false) }
             val chevronRotation by animateFloatAsState(
@@ -469,12 +491,19 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                         room.localParticipant.setScreenShareEnabled(false)
                                     }
                                 } else {
-                                    context.getSystemService(MediaProjectionManager::class.java)
-                                        ?.let { manager ->
-                                            screenCaptureLauncher.launch(
-                                                manager.createScreenCaptureIntent()
+                                    if (Settings.canDrawOverlays(context)) {
+                                        context.getSystemService(MediaProjectionManager::class.java)
+                                            ?.let { manager ->
+                                                screenCaptureLauncher.launch(manager.createScreenCaptureIntent())
+                                            }
+                                    } else {
+                                        overlayPermissionLauncher.launch(
+                                            Intent(
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                Uri.parse("package:${context.packageName}")
                                             )
-                                        }
+                                        )
+                                    }
                                 }
                             }
                     )
