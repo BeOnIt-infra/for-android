@@ -125,6 +125,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.documentfile.provider.DocumentFile
+import chat.stoat.BuildConfig
 import chat.stoat.R
 import chat.stoat.StoatApplication
 import chat.stoat.activities.StoatTweenDp
@@ -800,7 +801,7 @@ fun ChannelScreen(
                                 context.startActivity(
                                     Intent(
                                         Intent.ACTION_VIEW,
-                                        Uri.parse("https://call.178.104.95.94.nip.io")
+                                        Uri.parse(BuildConfig.CLIENT_CALL_URL)
                                     )
                                 )
                             }) {

@@ -2,3 +2,8 @@ sentry.dsn=
 sentry.upload_mappings=true
 build.debug.app_name=
 build.flavour_id=ZZUU
+
+# Standalone client-call web app the in-channel video button opens.
+# Overridable at build time with RVX_CLIENT_CALL_URL; defaults to the
+# Be On It deployment if left blank.
+build.client_call_url=

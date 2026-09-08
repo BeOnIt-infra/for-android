@@ -64,12 +64,33 @@ import kotlin.math.abs
 
 private const val ANNOTATE_TOPIC = "annotate"
 private const val LASER_FADE_MS = 800L
+
+/** Minimum movement before another point is sent, in normalised units. The pen
+ * already coalesced this way; the laser did not, and sent a packet per touch
+ * event. Kept identical to the web overlay so both load the data channel the
+ * same way. */
+private const val MIN_POINT_DISTANCE = 0.004f
+
+/** Hard caps so a long call can't grow the stroke list without bound. */
+private const val MAX_STROKES = 400
+private const val MAX_POINTS_PER_STROKE = 2000
 private val COLORS = listOf("#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6")
 
 private enum class Tool { None, Pen, Laser }
 
 private data class Pt(val x: Float, val y: Float, val t: Long)
-private data class PenStroke(val id: String, val color: String, val points: List<Pt>)
+
+private data class PenStroke(
+    val id: String,
+    /** Identity of whoever drew this, taken from the sender of the packet
+     * rather than its payload, so nobody can annotate as someone else. */
+    val author: String,
+    val color: String,
+    val points: List<Pt>,
+    /** Set once stroke_end arrives; finished strokes accept no more points. */
+    val done: Boolean = false,
+)
+
 private data class Laser(val color: String, val points: List<Pt>)
 
 private fun parseColor(hex: String): Color =
@@ -156,12 +177,18 @@ fun ScreenShareAnnotationOverlay(
         }
     }
 
-    fun applyEvent(event: JSONObject) {
+    /**
+     * @param senderId identity of whoever published this event — always the
+     * transport's view of the sender (or our own id for the local echo), never
+     * what the payload claims.
+     */
+    fun applyEvent(event: JSONObject, senderId: String) {
         val nowMs = System.currentTimeMillis()
         when (event.optString("type")) {
             "stroke_start" -> {
-                strokes = strokes + PenStroke(
+                val next = strokes + PenStroke(
                     id = event.optString("id"),
+                    author = senderId,
                     color = event.optString("color", COLORS[0]),
                     points = listOf(
                         Pt(
@@ -171,24 +198,48 @@ fun ScreenShareAnnotationOverlay(
                         )
                     ),
                 )
+                // Drop the oldest rather than growing without bound.
+                strokes = if (next.size > MAX_STROKES) next.takeLast(MAX_STROKES) else next
             }
 
             "stroke_point" -> {
                 val id = event.optString("id")
                 val p = Pt(event.optDouble("x").toFloat(), event.optDouble("y").toFloat(), nowMs)
                 strokes = strokes.map { s ->
-                    if (s.id == id) s.copy(points = s.points + p) else s
+                    // Only a stroke's author may extend it, and only until they
+                    // have ended it.
+                    if (s.id == id &&
+                        s.author == senderId &&
+                        !s.done &&
+                        s.points.size < MAX_POINTS_PER_STROKE
+                    ) {
+                        s.copy(points = s.points + p)
+                    } else {
+                        s
+                    }
+                }
+            }
+
+            "stroke_end" -> {
+                val id = event.optString("id")
+                strokes = strokes.map { s ->
+                    if (s.id == id && s.author == senderId) s.copy(done = true) else s
                 }
             }
 
             "laser" -> {
-                val pid = event.optString("participantId")
-                val existing = lasers[pid]?.points ?: emptyList()
+                val existing = lasers[senderId]?.points ?: emptyList()
                 val p = Pt(event.optDouble("x").toFloat(), event.optDouble("y").toFloat(), nowMs)
-                lasers = lasers + (pid to Laser(event.optString("color", COLORS[0]), existing + p))
+                lasers = lasers + (senderId to Laser(
+                    event.optString("color", COLORS[0]),
+                    existing + p,
+                ))
             }
 
-            "clear" -> strokes = emptyList()
+            // Scoped to the sender's own strokes: everyone in the call may
+            // publish on this topic, so a global wipe would let anyone erase
+            // other people's annotations.
+            "clear" -> strokes = strokes.filter { it.author != senderId }
         }
     }
 
@@ -210,10 +261,15 @@ fun ScreenShareAnnotationOverlay(
     LaunchedEffect(room) {
         room.events.events.collect { event ->
             if (event is RoomEvent.DataReceived && event.topic == ANNOTATE_TOPIC) {
-                try {
-                    applyEvent(JSONObject(String(event.data, Charsets.UTF_8)))
-                } catch (e: Exception) {
-                    // ignore malformed packets
+                // Without a verified sender the annotation can't be attributed
+                // to anyone, so drop it rather than trusting the payload.
+                val sender = event.participant?.identity?.value
+                if (sender != null) {
+                    try {
+                        applyEvent(JSONObject(String(event.data, Charsets.UTF_8)), sender)
+                    } catch (e: Exception) {
+                        // ignore malformed packets
+                    }
                 }
             }
         }
@@ -256,7 +312,7 @@ fun ScreenShareAnnotationOverlay(
                         var lx = nx(down.position)
                         var ly = ny(down.position)
                         val start = strokeStart(id, colorHex, lx, ly)
-                        applyEvent(start); send(start, true)
+                        applyEvent(start, myId); send(start, true)
                         while (true) {
                             val ev = awaitPointerEvent()
                             val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
@@ -265,25 +321,35 @@ fun ScreenShareAnnotationOverlay(
                             }
                             val px = nx(ch.position)
                             val py = ny(ch.position)
-                            if (abs(px - lx) + abs(py - ly) > 0.004f) {
+                            if (abs(px - lx) + abs(py - ly) > MIN_POINT_DISTANCE) {
                                 val pe = strokePoint(id, px, py)
-                                applyEvent(pe); send(pe, true)
+                                applyEvent(pe, myId); send(pe, true)
                                 lx = px; ly = py
                             }
                             ch.consume()
                         }
-                        send(strokeEnd(id), true)
+                        val end = strokeEnd(id)
+                        applyEvent(end, myId); send(end, true)
                     } else {
-                        val e0 = laserEvent(nx(down.position), ny(down.position))
-                        applyEvent(e0); send(e0, false)
+                        var lx = nx(down.position)
+                        var ly = ny(down.position)
+                        val e0 = laserEvent(lx, ly)
+                        applyEvent(e0, myId); send(e0, false)
                         while (true) {
                             val ev = awaitPointerEvent()
                             val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
                             if (!ch.pressed) {
                                 ch.consume(); break
                             }
-                            val e1 = laserEvent(nx(ch.position), ny(ch.position))
-                            applyEvent(e1); send(e1, false)
+                            val px = nx(ch.position)
+                            val py = ny(ch.position)
+                            // Same coalescing as the pen: a pointer that has
+                            // barely moved isn't worth a packet to everyone.
+                            if (abs(px - lx) + abs(py - ly) > MIN_POINT_DISTANCE) {
+                                val e1 = laserEvent(px, py)
+                                applyEvent(e1, myId); send(e1, false)
+                                lx = px; ly = py
+                            }
                             ch.consume()
                         }
                     }
@@ -381,8 +447,8 @@ fun ScreenShareAnnotationOverlay(
                 desc = stringResource(R.string.annotate_clear),
                 selected = false,
             ) {
-                strokes = emptyList()
-                send(JSONObject().put("type", "clear"), true)
+                val clear = JSONObject().put("type", "clear")
+                applyEvent(clear, myId); send(clear, true)
             }
         }
     }

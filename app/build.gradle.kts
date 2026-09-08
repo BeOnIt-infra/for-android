@@ -90,6 +90,11 @@ android {
                 "FLAVOUR_ID",
                 "\"${buildproperty("build.flavour_id", "RVX_BUILD_FLAVOUR_ID")}\""
             )
+            buildConfigField(
+                "String",
+                "CLIENT_CALL_URL",
+                "\"${buildproperty("build.client_call_url", "RVX_CLIENT_CALL_URL") ?: "https://call.178.104.95.94.nip.io"}\""
+            )
         }
 
         debug {
@@ -112,6 +117,11 @@ android {
                 "String",
                 "FLAVOUR_ID",
                 "\"${buildproperty("build.flavour_id", "RVX_BUILD_FLAVOUR_ID")}\""
+            )
+            buildConfigField(
+                "String",
+                "CLIENT_CALL_URL",
+                "\"${buildproperty("build.client_call_url", "RVX_CLIENT_CALL_URL") ?: "https://call.178.104.95.94.nip.io"}\""
             )
         }
     }
