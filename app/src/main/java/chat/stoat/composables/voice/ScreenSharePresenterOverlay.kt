@@ -8,6 +8,7 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
@@ -69,6 +70,7 @@ object ScreenSharePresenterOverlay {
     private var room: Room? = null
     private var currentTool = Tool.NONE
     private var currentColorHex = COLORS[0]
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private fun fullScreenFlags(touchable: Boolean): Int {
         var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -87,6 +89,20 @@ object ScreenSharePresenterOverlay {
         val appContext = context.applicationContext
         val manager = appContext.getSystemService(WindowManager::class.java)
         room = activeRoom
+
+        // The captured frame goes black once the real display turns off —
+        // MediaProjection keeps "recording" but there's nothing left to
+        // capture. Screen shares often go long stretches with nobody
+        // touching the phone (that's the point of the floating toolbar), so
+        // without this the share goes dark on its own screen timeout.
+        runCatching {
+            val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.SCREEN_DIM_WAKE_LOCK,
+                "chat.stoat:screenSharePresenter",
+            ).apply { acquire() }
+        }
         currentTool = Tool.NONE
 
         val view = AnnotationView(appContext) { x, y, phase -> onLocalTouch(x, y, phase) }
@@ -157,6 +173,8 @@ object ScreenSharePresenterOverlay {
         windowManager = null
         room = null
         currentTool = Tool.NONE
+        runCatching { wakeLock?.release() }
+        wakeLock = null
         // Fire-and-forget on a scope of its own: the overlay's own scope was
         // just cancelled above, and this needs to reach the server even
         // after the view is gone.
