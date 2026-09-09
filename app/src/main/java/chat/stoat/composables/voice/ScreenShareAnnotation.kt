@@ -129,6 +129,11 @@ fun ScreenShareAnnotationOverlay(
     room: Room,
     modifier: Modifier = Modifier,
     trackRef: TrackReference? = null,
+    /** True when the presenter is drawing these same strokes straight onto
+     * their own screen (see ScreenSharePresenterOverlay), so they're already
+     * in this video — drawing them again here would double them up. Pointer
+     * input for drawing new strokes is unaffected either way. */
+    suppressStrokes: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
 
@@ -360,6 +365,8 @@ fun ScreenShareAnnotationOverlay(
         }
 
         Canvas(modifier = Modifier.fillMaxSize().then(drawModifier)) {
+            if (suppressStrokes) return@Canvas
+
             val w = size.width
             val h = size.height
             val vRect = calculateVideoContentRect(w, h, videoWidth, videoHeight)

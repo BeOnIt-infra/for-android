@@ -21,10 +21,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-/** Displays remote annotations to the Android screen-share presenter. */
+/**
+ * Displays remote annotations to the Android screen-share presenter, drawn
+ * straight onto their real screen so they show up correctly positioned in
+ * the capture itself — no coordinate math to keep in sync with a video
+ * element on the viewing end. While this is active we publish
+ * [ANNOTATIONS_BAKED_IN_ATTR] on the local participant so viewers know the
+ * strokes are already in the video and skip drawing their own copy on top.
+ */
 object ScreenSharePresenterOverlay {
     private const val TOPIC = "annotate"
     private const val LASER_FADE_MS = 800L
+    const val ANNOTATIONS_BAKED_IN_ATTR = "io.beonit.annotationsBakedIn"
 
     private data class Point(val x: Float, val y: Float, val time: Long)
     private data class Stroke(val id: String, val color: Int, val points: MutableList<Point>)
@@ -52,8 +60,12 @@ object ScreenSharePresenterOverlay {
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            // Deliberately no FLAG_SECURE: this overlay only draws annotation
+            // strokes, nothing sensitive, and screen-sharing is itself a form
+            // of screen capture — FLAG_SECURE blacks the shared frame out
+            // wherever this full-screen overlay is mounted, taking the
+            // presenter's whole share down with it.
             PixelFormat.TRANSLUCENT,
         )
 
@@ -63,6 +75,11 @@ object ScreenSharePresenterOverlay {
 
         val overlayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         scope = overlayScope
+        overlayScope.launch {
+            runCatching {
+                room.localParticipant.updateAttributes(mapOf(ANNOTATIONS_BAKED_IN_ATTR to "true"))
+            }
+        }
         overlayScope.launch {
             room.events.events.collect { event ->
                 if (event is RoomEvent.DataReceived && event.topic == TOPIC) {
@@ -80,12 +97,22 @@ object ScreenSharePresenterOverlay {
         }
     }
 
-    fun stop() {
+    fun stop(room: Room? = null) {
         scope?.cancel()
         scope = null
         overlayView?.let { view -> runCatching { windowManager?.removeView(view) } }
         overlayView = null
         windowManager = null
+        // Fire-and-forget on a scope of its own: the overlay's own scope was
+        // just cancelled above, and this needs to reach the server even
+        // after the view is gone.
+        if (room != null) {
+            CoroutineScope(Dispatchers.Main.immediate).launch {
+                runCatching {
+                    room.localParticipant.updateAttributes(mapOf(ANNOTATIONS_BAKED_IN_ATTR to "false"))
+                }
+            }
+        }
     }
 
     private class AnnotationView(context: Context) : View(context) {

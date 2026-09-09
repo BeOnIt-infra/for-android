@@ -113,10 +113,14 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
         val trackRefs by rememberTracks(passedRoom = room)
         val isDeafened = VoiceCallManager.isDeafened
 
+        // ScreenSharePresenterOverlay draws straight onto the presenter's real
+        // screen, which puts its strokes in the capture too — see
+        // ANNOTATIONS_BAKED_IN_ATTR below, which tells every viewer to skip
+        // drawing their own copy of the same strokes on top of this feed.
         DisposableEffect(room, isScreenShared) {
             if (isScreenShared) ScreenSharePresenterOverlay.start(context, room)
             onDispose {
-                if (isScreenShared) ScreenSharePresenterOverlay.stop()
+                if (isScreenShared) ScreenSharePresenterOverlay.stop(room)
             }
         }
 
@@ -194,9 +198,12 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                 )
                                 // Be On It: draw / laser overlay on screen shares
                                 if (trackRef.source == Track.Source.SCREEN_SHARE) {
+                                    val presenterAttrs by trackRef.participant::attributes.flow.collectAsState()
+                                    val bakedIn = presenterAttrs[ScreenSharePresenterOverlay.ANNOTATIONS_BAKED_IN_ATTR] == "true"
                                     ScreenShareAnnotationOverlay(
                                         room = room,
                                         trackRef = trackRef,
+                                        suppressStrokes = bakedIn,
                                         modifier = Modifier.matchParentSize()
                                     )
                                 }
