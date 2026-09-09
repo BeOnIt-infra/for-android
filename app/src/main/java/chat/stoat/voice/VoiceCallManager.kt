@@ -103,7 +103,13 @@ object VoiceCallManager {
             RoomOptions(
                 screenShareTrackCaptureDefaults = LocalVideoTrackOptions(
                     isScreencast = true,
-                    captureParams = ScreenSharePresets.H720_FPS30.capture
+                    // H720_FPS30 forces every capture into a fixed 720p-ish
+                    // frame, padding it with real black pixels when the
+                    // device's actual screen isn't that exact aspect ratio —
+                    // no amount of CSS on a viewer can crop bars that are
+                    // baked into the encoded video itself. ORIGINAL captures
+                    // at the device's native resolution instead.
+                    captureParams = ScreenSharePresets.ORIGINAL.capture
                 )
             )
         )
