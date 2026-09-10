@@ -730,6 +730,8 @@
     <string name="annotate_pen">Draw</string>
     <string name="annotate_laser">Laser pointer</string>
     <string name="annotate_clear">Clear annotations</string>
+    <string name="annotate_capture">Save screenshot</string>
+    <string name="annotate_capture_failed">Couldn\'t save screenshot</string>
     <string name="client_call_start">Start a client call (shareable link, no account needed)</string>
     <string name="voice_notification_fallback_channel_name">Voice channel</string>
 

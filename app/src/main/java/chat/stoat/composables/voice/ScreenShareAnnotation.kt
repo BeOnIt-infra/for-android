@@ -1,5 +1,15 @@
 package chat.stoat.composables.voice
 
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +44,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -47,9 +58,15 @@ import io.livekit.android.compose.types.TrackReference
 import io.livekit.android.room.track.VideoTrack
 import livekit.org.webrtc.VideoFrame
 import livekit.org.webrtc.VideoSink
+import livekit.org.webrtc.YuvHelper
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
 /**
@@ -124,6 +141,146 @@ private fun calculateVideoContentRect(cw: Float, ch: Float, vw: Int, vh: Int): V
     }
 }
 
+/**
+ * Composite a raw WebRTC frame with the strokes/lasers currently drawn on
+ * top of it (i.e. exactly what's visible right now) into a Bitmap, at the
+ * video's native resolution. Mirrors the web overlay's own capture, and the
+ * "already baked into the video pixels" reasoning for [suppressStrokes] is
+ * identical to the Canvas draw block above.
+ *
+ * Does not retain/release [frame] itself -- the caller owns that.
+ */
+private fun captureFrame(
+    frame: VideoFrame,
+    strokes: List<PenStroke>,
+    lasers: Map<String, Laser>,
+    suppressStrokes: Boolean,
+): Bitmap? {
+    val buffer = frame.buffer.toI420() ?: return null
+    try {
+        val width = buffer.width
+        val height = buffer.height
+        if (width <= 0 || height <= 0) return null
+
+        // I420 -> NV12 (a WebRTC-provided conversion) -> NV21 (byte-swap the
+        // interleaved chroma plane) -> JPEG via YuvImage, since there's no
+        // direct YUV-to-Bitmap path in the framework.
+        val ySize = width * height
+        val uvSize = ((width + 1) / 2) * ((height + 1) / 2)
+        val nv12 = ByteBuffer.allocateDirect(ySize + uvSize * 2)
+        YuvHelper.I420ToNV12(
+            buffer.dataY, buffer.strideY,
+            buffer.dataU, buffer.strideU,
+            buffer.dataV, buffer.strideV,
+            nv12, width, height,
+        )
+        val nv12Bytes = ByteArray(nv12.capacity())
+        nv12.rewind()
+        nv12.get(nv12Bytes)
+        var i = ySize
+        while (i < nv12Bytes.size - 1) {
+            val tmp = nv12Bytes[i]
+            nv12Bytes[i] = nv12Bytes[i + 1]
+            nv12Bytes[i + 1] = tmp
+            i += 2
+        }
+
+        val yuvImage = YuvImage(nv12Bytes, ImageFormat.NV21, width, height, null)
+        val jpegOut = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 95, jpegOut)
+        val jpegBytes = jpegOut.toByteArray()
+        val videoBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return null
+
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        canvas.drawBitmap(videoBitmap, 0f, 0f, null)
+        videoBitmap.recycle()
+
+        if (!suppressStrokes) {
+            val strokePaint = Paint().apply {
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+                strokeWidth = width / 400f
+                isAntiAlias = true
+            }
+            for (s in strokes) {
+                if (s.points.size < 2) continue
+                val path = android.graphics.Path()
+                s.points.forEachIndexed { idx, p ->
+                    val x = p.x * width
+                    val y = p.y * height
+                    if (idx == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                strokePaint.color = try {
+                    android.graphics.Color.parseColor(s.color)
+                } catch (e: Exception) {
+                    android.graphics.Color.RED
+                }
+                canvas.drawPath(path, strokePaint)
+            }
+
+            val laserPaint = Paint().apply {
+                isAntiAlias = true
+                style = Paint.Style.FILL
+            }
+            val nowMs = System.currentTimeMillis()
+            for ((_, l) in lasers) {
+                for (p in l.points) {
+                    val age = nowMs - p.t
+                    if (age >= LASER_FADE_MS) continue
+                    val alpha = (1f - age.toFloat() / LASER_FADE_MS).coerceIn(0f, 1f)
+                    laserPaint.color = try {
+                        android.graphics.Color.parseColor(l.color)
+                    } catch (e: Exception) {
+                        android.graphics.Color.RED
+                    }
+                    laserPaint.alpha = (alpha * 255).toInt()
+                    canvas.drawCircle(
+                        p.x * width,
+                        p.y * height,
+                        (5f * alpha + 3f) * (width / 1000f),
+                        laserPaint,
+                    )
+                }
+            }
+        }
+
+        return out
+    } finally {
+        buffer.release()
+    }
+}
+
+/** Same MediaStore save pattern as ImageViewActivity.saveToGallery, just under its own album. */
+private fun saveScreenshot(context: Context, bitmap: Bitmap): Boolean {
+    return try {
+        val resolver = context.contentResolver
+        val uri = resolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "BeOnIt-${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/BeOnIt")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            },
+        ) ?: return false
+        val wrote = resolver.openOutputStream(uri)?.use { stream ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, stream)
+        } ?: false
+        if (!wrote) return false
+        resolver.update(
+            uri,
+            ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+            null,
+            null,
+        )
+        true
+    } catch (e: Exception) {
+        false
+    }
+}
+
 @Composable
 fun ScreenShareAnnotationOverlay(
     room: Room,
@@ -136,9 +293,18 @@ fun ScreenShareAnnotationOverlay(
     suppressStrokes: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     var videoWidth by remember { mutableIntStateOf(0) }
     var videoHeight by remember { mutableIntStateOf(0) }
+
+    // Latest frame, retained so the capture button has something valid to
+    // read on demand -- WebRTC recycles frame buffers aggressively once
+    // onFrame returns, so holding one past the callback requires retain().
+    // Plain AtomicReference rather than Compose state: this is a cache for
+    // later use, not something that should trigger a recomposition on every
+    // one of the 30-60 frames a second that pass through here.
+    val latestFrameRef = remember { AtomicReference<VideoFrame?>(null) }
 
     val videoTrack = trackRef?.publication?.track as? VideoTrack
     DisposableEffect(videoTrack) {
@@ -151,11 +317,14 @@ fun ScreenShareAnnotationOverlay(
                     videoWidth = w
                     videoHeight = h
                 }
+                frame.retain()
+                latestFrameRef.getAndSet(frame)?.release()
             }
         }
         videoTrack.addRenderer(sink)
         onDispose {
             videoTrack.removeRenderer(sink)
+            latestFrameRef.getAndSet(null)?.release()
         }
     }
 
@@ -261,6 +430,33 @@ fun ScreenShareAnnotationOverlay(
     fun laserEvent(x: Float, y: Float) = JSONObject()
         .put("type", "laser").put("participantId", myId).put("color", colorHex)
         .put("x", x.toDouble()).put("y", y.toDouble())
+
+    fun handleCapture() {
+        val frame = latestFrameRef.get() ?: return
+        // Snapshot now, on the main thread, rather than re-reading this
+        // Compose state later from a background coroutine.
+        val strokesSnapshot = strokes
+        val lasersSnapshot = lasers
+        frame.retain()
+        scope.launch(Dispatchers.Default) {
+            val bitmap = try {
+                captureFrame(frame, strokesSnapshot, lasersSnapshot, suppressStrokes)
+            } catch (e: Exception) {
+                null
+            } finally {
+                frame.release()
+            }
+            val messageRes = if (bitmap != null && saveScreenshot(context, bitmap)) {
+                R.string.media_viewer_saved
+            } else {
+                R.string.annotate_capture_failed
+            }
+            bitmap?.recycle()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, context.getString(messageRes), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // Receive annotations from everyone else in the call.
     LaunchedEffect(room) {
@@ -457,6 +653,12 @@ fun ScreenShareAnnotationOverlay(
                 val clear = JSONObject().put("type", "clear")
                 applyEvent(clear, myId); send(clear, true)
             }
+
+            ToolButton(
+                iconRes = R.drawable.ic_camera_24dp,
+                desc = stringResource(R.string.annotate_capture),
+                selected = false,
+            ) { handleCapture() }
         }
     }
 }
