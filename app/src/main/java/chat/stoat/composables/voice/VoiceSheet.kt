@@ -94,6 +94,14 @@ import logcat.asLog
 import logcat.logcat
 import kotlin.time.Duration.Companion.seconds
 
+/** Presets offered in the instant-replay duration menu, in seconds. Kept in
+ * sync with MAX_CLIP_SECONDS in ReplayBufferRecorder (the longest preset
+ * here bounds how much footage that buffer needs to retain). */
+private val REPLAY_DURATIONS_SECONDS = listOf(15, 30, 60, 120)
+
+private fun formatReplayDuration(seconds: Int): String =
+    if (seconds < 60) "${seconds}s" else "${seconds / 60}m"
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun VoiceSheet(onDisconnect: () -> Unit) {
@@ -528,32 +536,52 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                     )
                     AnimatedVisibility(visible = isScreenShared) {
                         val replayAvailable = ReplayBufferRecorder.isAvailable
-                        ListItem(
-                            colors = ListItemDefaults.colors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainer
-                            ),
-                            headlineContent = { Text(stringResource(R.string.voice_action_save_replay)) },
-                            leadingContent = {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_undo_24dp),
-                                    contentDescription = null
-                                )
-                            },
-                            modifier = Modifier
-                                .clip(MaterialTheme.shapes.extraSmall)
-                                .clickable(enabled = replayAvailable) {
-                                    scope.launch {
-                                        val saved = ReplayBufferRecorder.saveReplay(context)
-                                        val messageRes = if (saved) {
-                                            R.string.media_viewer_saved
-                                        } else {
-                                            R.string.voice_action_save_replay_failed
-                                        }
-                                        Toast.makeText(context, context.getString(messageRes), Toast.LENGTH_SHORT)
-                                            .show()
-                                    }
+                        var replayMenuOpen by remember { mutableStateOf(false) }
+
+                        fun saveReplay(seconds: Int) {
+                            scope.launch {
+                                val saved = ReplayBufferRecorder.saveReplay(context, seconds)
+                                val messageRes = if (saved) {
+                                    R.string.media_viewer_saved
+                                } else {
+                                    R.string.voice_action_save_replay_failed
                                 }
-                        )
+                                Toast.makeText(context, context.getString(messageRes), Toast.LENGTH_SHORT)
+                                    .show()
+                            }
+                        }
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            ListItem(
+                                colors = ListItemDefaults.colors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                                ),
+                                headlineContent = { Text(stringResource(R.string.voice_action_save_replay)) },
+                                leadingContent = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_undo_24dp),
+                                        contentDescription = null
+                                    )
+                                },
+                                modifier = Modifier
+                                    .clip(MaterialTheme.shapes.extraSmall)
+                                    .clickable(enabled = replayAvailable) { replayMenuOpen = true }
+                            )
+                            DropdownMenu(
+                                expanded = replayMenuOpen,
+                                onDismissRequest = { replayMenuOpen = false }
+                            ) {
+                                REPLAY_DURATIONS_SECONDS.forEach { seconds ->
+                                    DropdownMenuItem(
+                                        text = { Text(formatReplayDuration(seconds)) },
+                                        onClick = {
+                                            replayMenuOpen = false
+                                            saveReplay(seconds)
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                     if (audioHandler != null) {
                         Box(modifier = Modifier.fillMaxWidth()) {

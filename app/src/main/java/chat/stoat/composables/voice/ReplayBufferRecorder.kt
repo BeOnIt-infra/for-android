@@ -40,11 +40,11 @@ import java.nio.ByteBuffer
  * screen share is active, and keeps a rolling deque of its encoded output
  * (each access unit tagged with its timestamp and keyframe flag). Saving a
  * clip just means: find the newest buffered keyframe that's still at least
- * CLIP_SECONDS old, and mux everything from there to "now" into an mp4 with
- * MediaMuxer -- no re-encoding, no second pass. The buffer is trimmed the
- * same way (drop everything before the oldest keyframe still worth
- * keeping), so it only ever holds a little more than CLIP_SECONDS of
- * footage.
+ * as old as the requested clip length, and mux everything from there to
+ * "now" into an mp4 with MediaMuxer -- no re-encoding, no second pass. The
+ * buffer is trimmed the same way (drop everything before the oldest
+ * keyframe still worth keeping for MAX_CLIP_SECONDS), so it only ever holds
+ * a little more than that much footage.
  *
  * Frames come from a [VideoSink] on the local screen-share [VideoTrack] --
  * the same hook point [ScreenShareAnnotationOverlay] uses for its capture
@@ -52,11 +52,13 @@ import java.nio.ByteBuffer
  * this codebase already has proven working).
  */
 object ReplayBufferRecorder {
-    private const val CLIP_SECONDS = 15
+    /** Longest clip the UI offers (see the duration menu in VoiceSheet) --
+     * bounds how much footage the buffer needs to retain. */
+    private const val MAX_CLIP_SECONDS = 120
 
-    /** Buffer a bit more than CLIP_SECONDS so there's always a keyframe to
-     * start a save from at or before "now - CLIP_SECONDS". */
-    private const val RETAIN_SECONDS = CLIP_SECONDS + 6
+    /** Buffer a bit more than MAX_CLIP_SECONDS so there's always a keyframe
+     * to start a save from at or before "now - requested seconds". */
+    private const val RETAIN_SECONDS = MAX_CLIP_SECONDS + 6
 
     /** Screen-share content rarely needs full frame rate to be useful as a
      * "what just happened" reference, and a lower rate keeps CPU/battery/
@@ -273,12 +275,13 @@ object ReplayBufferRecorder {
     }
 
     /** Safe to call from any thread/dispatcher. */
-    suspend fun saveReplay(context: Context): Boolean = withContext(Dispatchers.Default) {
+    suspend fun saveReplay(context: Context, seconds: Int): Boolean = withContext(Dispatchers.Default) {
+        val clipSeconds = seconds.coerceIn(1, MAX_CLIP_SECONDS)
         val format = outputFormat ?: return@withContext false
         val samples = synchronized(bufferLock) {
             val list = buffer.toList()
             val latestPts = list.lastOrNull()?.presentationTimeUs ?: return@withContext false
-            val targetCutoff = latestPts - CLIP_SECONDS * 1_000_000L
+            val targetCutoff = latestPts - clipSeconds * 1_000_000L
             var startIdx = list.indexOfFirst { (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 }
             for ((idx, s) in list.withIndex()) {
                 if (s.presentationTimeUs <= targetCutoff && (s.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
