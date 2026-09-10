@@ -713,6 +713,8 @@
     <string name="voice_action_video">Video</string>
     <string name="voice_action_screen_share">Share screen</string>
     <string name="voice_action_flip_camera">Flip camera</string>
+    <string name="voice_action_save_replay">Save last 15 seconds</string>
+    <string name="voice_action_save_replay_failed">Couldn\'t save clip</string>
 
     <string name="voice_audio_output">Audio output</string>
     <string name="voice_audio_output_speaker">Speaker</string>

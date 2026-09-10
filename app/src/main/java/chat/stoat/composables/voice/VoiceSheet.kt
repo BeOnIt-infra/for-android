@@ -5,6 +5,7 @@ import android.media.projection.MediaProjectionManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -121,6 +122,17 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
             if (isScreenShared) ScreenSharePresenterOverlay.start(context, room)
             onDispose {
                 if (isScreenShared) ScreenSharePresenterOverlay.stop(room)
+            }
+        }
+
+        // Instant replay: keep a rolling buffer of the local screen share so
+        // "save last 15 seconds" (below, in the expanded toolbar) has
+        // something to save. Same start/stop lifecycle as the presenter
+        // overlay above.
+        DisposableEffect(room, isScreenShared) {
+            if (isScreenShared) ReplayBufferRecorder.start(room)
+            onDispose {
+                if (isScreenShared) ReplayBufferRecorder.stop()
             }
         }
 
@@ -514,6 +526,35 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                 }
                             }
                     )
+                    AnimatedVisibility(visible = isScreenShared) {
+                        val replayAvailable = ReplayBufferRecorder.isAvailable
+                        ListItem(
+                            colors = ListItemDefaults.colors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer
+                            ),
+                            headlineContent = { Text(stringResource(R.string.voice_action_save_replay)) },
+                            leadingContent = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_undo_24dp),
+                                    contentDescription = null
+                                )
+                            },
+                            modifier = Modifier
+                                .clip(MaterialTheme.shapes.extraSmall)
+                                .clickable(enabled = replayAvailable) {
+                                    scope.launch {
+                                        val saved = ReplayBufferRecorder.saveReplay(context)
+                                        val messageRes = if (saved) {
+                                            R.string.media_viewer_saved
+                                        } else {
+                                            R.string.voice_action_save_replay_failed
+                                        }
+                                        Toast.makeText(context, context.getString(messageRes), Toast.LENGTH_SHORT)
+                                            .show()
+                                    }
+                                }
+                        )
+                    }
                     if (audioHandler != null) {
                         Box(modifier = Modifier.fillMaxWidth()) {
                             ListItem(
