@@ -225,25 +225,46 @@ private fun captureFrame(
                 style = Paint.Style.FILL
             }
             val nowMs = System.currentTimeMillis()
+            val laserScale = width / 1000f
+            // Same beam the live overlays draw, so a captured screenshot
+            // matches what was on screen rather than showing a row of dots.
             for ((_, l) in lasers) {
-                for (p in l.points) {
-                    val age = nowMs - p.t
-                    if (age >= LASER_FADE_MS) continue
-                    val alpha = (1f - age.toFloat() / LASER_FADE_MS).coerceIn(0f, 1f)
-                    laserPaint.color = try {
-                        android.graphics.Color.parseColor(l.color)
-                    } catch (e: Exception) {
-                        android.graphics.Color.RED
+                val live = l.points.filter { nowMs - it.t < LASER_FADE_MS }
+                if (live.isEmpty()) continue
+                laserPaint.color = try {
+                    android.graphics.Color.parseColor(l.color)
+                } catch (e: Exception) {
+                    android.graphics.Color.RED
+                }
+                laserPaint.strokeCap = Paint.Cap.ROUND
+                for (i in 1 until live.size) {
+                    val life = (1f - (nowMs - live[i].t).toFloat() / LASER_FADE_MS).coerceIn(0f, 1f)
+                    if (life <= 0f) continue
+                    laserPaint.style = Paint.Style.STROKE
+                    for ((w, a) in listOf((10f * life + 3f) to 0.25f, (3f * life + 1.5f) to 1f)) {
+                        laserPaint.alpha = (life * a * 255).toInt()
+                        laserPaint.strokeWidth = w * laserScale
+                        canvas.drawLine(
+                            live[i - 1].x * width,
+                            live[i - 1].y * height,
+                            live[i].x * width,
+                            live[i].y * height,
+                            laserPaint,
+                        )
                     }
-                    laserPaint.alpha = (alpha * 255).toInt()
-                    canvas.drawCircle(
-                        p.x * width,
-                        p.y * height,
-                        (5f * alpha + 3f) * (width / 1000f),
-                        laserPaint,
-                    )
+                }
+                val tip = live.last()
+                val tipLife = (1f - (nowMs - tip.t).toFloat() / LASER_FADE_MS).coerceIn(0f, 1f)
+                if (tipLife > 0f) {
+                    laserPaint.style = Paint.Style.FILL
+                    val radius = (4f * tipLife + 2f) * laserScale
+                    for ((r, a) in listOf((radius * 2.2f) to 0.2f, radius to 1f)) {
+                        laserPaint.alpha = (tipLife * a * 255).toInt()
+                        canvas.drawCircle(tip.x * width, tip.y * height, r, laserPaint)
+                    }
                 }
             }
+            laserPaint.style = Paint.Style.FILL
         }
 
         return out
@@ -584,16 +605,49 @@ fun ScreenShareAnnotationOverlay(
             }
 
             val t = now // read to animate fade
+            // A beam, not a row of dots: segments between consecutive points,
+            // width and opacity following the age of the trail so it tapers
+            // and fades toward the tail. Two passes per segment -- wide and
+            // faint under narrow and bright -- is what reads as a beam.
             for ((_, l) in lasers) {
-                for (p in l.points) {
-                    val age = t - p.t
-                    if (age >= LASER_FADE_MS) continue
-                    val alpha = (1f - age.toFloat() / LASER_FADE_MS).coerceIn(0f, 1f)
-                    drawCircle(
-                        color = parseColor(l.color).copy(alpha = alpha),
-                        radius = (5f * alpha + 3f).dp.toPx(),
-                        center = Offset(vRect.left + p.x * vRect.width, vRect.top + p.y * vRect.height),
+                val live = l.points.filter { t - it.t < LASER_FADE_MS }
+                if (live.isEmpty()) continue
+                for (i in 1 until live.size) {
+                    val life = (1f - (t - live[i].t).toFloat() / LASER_FADE_MS).coerceIn(0f, 1f)
+                    if (life <= 0f) continue
+                    val from = Offset(
+                        vRect.left + live[i - 1].x * vRect.width,
+                        vRect.top + live[i - 1].y * vRect.height,
                     )
+                    val to = Offset(
+                        vRect.left + live[i].x * vRect.width,
+                        vRect.top + live[i].y * vRect.height,
+                    )
+                    for ((w, a) in listOf((10f * life + 3f) to 0.25f, (3f * life + 1.5f) to 1f)) {
+                        drawLine(
+                            color = parseColor(l.color).copy(alpha = life * a),
+                            start = from,
+                            end = to,
+                            strokeWidth = w.dp.toPx(),
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                }
+                // The head stays a dot, so a pointer held still is visible.
+                val tip = live.last()
+                val tipLife = (1f - (t - tip.t).toFloat() / LASER_FADE_MS).coerceIn(0f, 1f)
+                if (tipLife > 0f) {
+                    val radius = 4f * tipLife + 2f
+                    for ((r, a) in listOf((radius * 2.2f) to 0.2f, radius to 1f)) {
+                        drawCircle(
+                            color = parseColor(l.color).copy(alpha = tipLife * a),
+                            radius = r.dp.toPx(),
+                            center = Offset(
+                                vRect.left + tip.x * vRect.width,
+                                vRect.top + tip.y * vRect.height,
+                            ),
+                        )
+                    }
                 }
             }
         }
