@@ -147,7 +147,15 @@ object ScreenSharePresenterOverlay {
             activeRoom.events.events.collect { event ->
                 if (event is RoomEvent.DataReceived && event.topic == TOPIC) {
                     runCatching {
-                        view.applyEvent(JSONObject(String(event.data, Charsets.UTF_8)))
+                        val payload = JSONObject(String(event.data, Charsets.UTF_8))
+                        // This overlay covers our own screen, so only marks
+                        // aimed at our share belong on it. No target means the
+                        // sender predates per-share scoping; show it as before.
+                        val target = payload.optString("target", null)
+                        val me = activeRoom.localParticipant.identity?.value
+                        if (target == null || target == me) {
+                            view.applyEvent(payload)
+                        }
                     }
                 }
             }

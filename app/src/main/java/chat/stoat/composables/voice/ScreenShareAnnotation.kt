@@ -102,13 +102,18 @@ private data class PenStroke(
     /** Identity of whoever drew this, taken from the sender of the packet
      * rather than its payload, so nobody can annotate as someone else. */
     val author: String,
+    /** Identity of whoever's screen this was drawn on. Annotations used to be
+     * room-scoped, so with two people sharing at once the same stroke landed
+     * on both tiles. null means the sender predates this field, and the mark
+     * is shown on every share as it used to be. */
+    val target: String?,
     val color: String,
     val points: List<Pt>,
     /** Set once stroke_end arrives; finished strokes accept no more points. */
     val done: Boolean = false,
 )
 
-private data class Laser(val color: String, val points: List<Pt>)
+private data class Laser(val color: String, val target: String?, val points: List<Pt>)
 
 private fun parseColor(hex: String): Color =
     try {
@@ -204,6 +209,7 @@ private fun captureFrame(
                 strokeWidth = width / 400f
                 isAntiAlias = true
             }
+            // Already filtered to this share by the caller.
             for (s in strokes) {
                 if (s.points.size < 2) continue
                 val path = android.graphics.Path()
@@ -356,6 +362,9 @@ fun ScreenShareAnnotationOverlay(
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
 
     val myId = room.localParticipant.identity?.value ?: "me"
+    // Whose share this overlay sits on. Marks carry it so two people sharing
+    // at once no longer draw onto one shared canvas.
+    val shareTarget = trackRef?.participant?.identity?.value
 
     fun send(event: JSONObject, reliable: Boolean) {
         val bytes = event.toString().toByteArray(Charsets.UTF_8)
@@ -384,6 +393,7 @@ fun ScreenShareAnnotationOverlay(
                 val next = strokes + PenStroke(
                     id = event.optString("id"),
                     author = senderId,
+                    target = event.optString("target", null),
                     color = event.optString("color", COLORS[0]),
                     points = listOf(
                         Pt(
@@ -423,10 +433,15 @@ fun ScreenShareAnnotationOverlay(
             }
 
             "laser" -> {
-                val existing = lasers[senderId]?.points ?: emptyList()
+                // Keyed by sender *and* share, so one person pointing at two
+                // shares doesn't overwrite their own trail.
+                val target = event.optString("target", null)
+                val key = senderId + "|" + (target ?: "")
+                val existing = lasers[key]?.points ?: emptyList()
                 val p = Pt(event.optDouble("x").toFloat(), event.optDouble("y").toFloat(), nowMs)
-                lasers = lasers + (senderId to Laser(
+                lasers = lasers + (key to Laser(
                     event.optString("color", COLORS[0]),
+                    target,
                     existing + p,
                 ))
             }
@@ -434,13 +449,21 @@ fun ScreenShareAnnotationOverlay(
             // Scoped to the sender's own strokes: everyone in the call may
             // publish on this topic, so a global wipe would let anyone erase
             // other people's annotations.
-            "clear" -> strokes = strokes.filter { it.author != senderId }
+            // Scoped to this share as well as to the sender, so clearing one
+            // person's screen doesn't wipe what's drawn on another's.
+            "clear" -> {
+                val target = event.optString("target", null)
+                strokes = strokes.filter {
+                    it.author != senderId || (target != null && it.target != target)
+                }
+            }
         }
     }
 
     fun strokeStart(id: String, c: String, x: Float, y: Float) = JSONObject()
         .put("type", "stroke_start").put("id", id).put("color", c)
         .put("x", x.toDouble()).put("y", y.toDouble())
+        .apply { shareTarget?.let { put("target", it) } }
 
     fun strokePoint(id: String, x: Float, y: Float) = JSONObject()
         .put("type", "stroke_point").put("id", id)
@@ -451,13 +474,14 @@ fun ScreenShareAnnotationOverlay(
     fun laserEvent(x: Float, y: Float) = JSONObject()
         .put("type", "laser").put("participantId", myId).put("color", colorHex)
         .put("x", x.toDouble()).put("y", y.toDouble())
+        .apply { shareTarget?.let { put("target", it) } }
 
     fun handleCapture() {
         val frame = latestFrameRef.get() ?: return
         // Snapshot now, on the main thread, rather than re-reading this
         // Compose state later from a background coroutine.
-        val strokesSnapshot = strokes
-        val lasersSnapshot = lasers
+        val strokesSnapshot = strokes.filter { it.target == null || it.target == shareTarget }
+        val lasersSnapshot = lasers.filter { it.value.target == null || it.value.target == shareTarget }
         frame.retain()
         scope.launch(Dispatchers.Default) {
             val bitmap = try {
@@ -504,7 +528,7 @@ fun ScreenShareAnnotationOverlay(
             val n = System.currentTimeMillis()
             now = n
             val pruned = lasers
-                .mapValues { (_, l) -> Laser(l.color, l.points.filter { n - it.t < LASER_FADE_MS }) }
+                .mapValues { (_, l) -> Laser(l.color, l.target, l.points.filter { n - it.t < LASER_FADE_MS }) }
                 .filterValues { it.points.isNotEmpty() }
             if (pruned.size != lasers.size ||
                 pruned.any { (k, v) -> v.points.size != (lasers[k]?.points?.size ?: -1) }
@@ -609,7 +633,7 @@ fun ScreenShareAnnotationOverlay(
             // width and opacity following the age of the trail so it tapers
             // and fades toward the tail. Two passes per segment -- wide and
             // faint under narrow and bright -- is what reads as a beam.
-            for ((_, l) in lasers) {
+            for ((_, l) in lasers.filter { it.value.target == null || it.value.target == shareTarget }) {
                 val live = l.points.filter { t - it.t < LASER_FADE_MS }
                 if (live.isEmpty()) continue
                 for (i in 1 until live.size) {
@@ -705,6 +729,7 @@ fun ScreenShareAnnotationOverlay(
                 selected = false,
             ) {
                 val clear = JSONObject().put("type", "clear")
+                    .apply { shareTarget?.let { put("target", it) } }
                 applyEvent(clear, myId); send(clear, true)
             }
 
