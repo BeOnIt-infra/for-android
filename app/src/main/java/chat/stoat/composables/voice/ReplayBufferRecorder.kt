@@ -1,14 +1,13 @@
 package chat.stoat.composables.voice
 
-import android.content.ContentValues
 import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
-import android.provider.MediaStore
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -274,13 +273,17 @@ object ReplayBufferRecorder {
         }
     }
 
-    /** Safe to call from any thread/dispatcher. */
-    suspend fun saveReplay(context: Context, seconds: Int): Boolean = withContext(Dispatchers.Default) {
+    /**
+     * Muxes the last [seconds] of buffered footage into a temp mp4 file
+     * under [Context.getCacheDir], or null if there's nothing to save yet.
+     * Caller owns the file and must delete it when done.
+     */
+    private suspend fun muxToTempFile(context: Context, seconds: Int): File? = withContext(Dispatchers.Default) {
         val clipSeconds = seconds.coerceIn(1, MAX_CLIP_SECONDS)
-        val format = outputFormat ?: return@withContext false
+        val format = outputFormat ?: return@withContext null
         val samples = synchronized(bufferLock) {
             val list = buffer.toList()
-            val latestPts = list.lastOrNull()?.presentationTimeUs ?: return@withContext false
+            val latestPts = list.lastOrNull()?.presentationTimeUs ?: return@withContext null
             val targetCutoff = latestPts - clipSeconds * 1_000_000L
             var startIdx = list.indexOfFirst { (it.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 }
             for ((idx, s) in list.withIndex()) {
@@ -288,10 +291,10 @@ object ReplayBufferRecorder {
                     startIdx = idx
                 }
             }
-            if (startIdx < 0) return@withContext false
+            if (startIdx < 0) return@withContext null
             list.subList(startIdx, list.size)
         }
-        if (samples.isEmpty()) return@withContext false
+        if (samples.isEmpty()) return@withContext null
 
         val tempFile = File.createTempFile("replay", ".mp4", context.cacheDir)
         try {
@@ -306,40 +309,32 @@ object ReplayBufferRecorder {
             }
             muxer.stop()
             muxer.release()
-
-            saveToGallery(context, tempFile)
+            tempFile
         } catch (e: Exception) {
-            false
-        } finally {
             tempFile.delete()
+            null
         }
     }
 
-    private fun saveToGallery(context: Context, file: File): Boolean {
-        return try {
-            val resolver = context.contentResolver
-            val uri = resolver.insert(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                ContentValues().apply {
-                    put(MediaStore.Video.Media.DISPLAY_NAME, "BeOnIt-Replay-${System.currentTimeMillis()}.mp4")
-                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/BeOnIt")
-                    put(MediaStore.Video.Media.IS_PENDING, 1)
-                },
-            ) ?: return false
-            val wrote = resolver.openOutputStream(uri)?.use { out ->
-                file.inputStream().use { it.copyTo(out) }
-            } != null
-            if (!wrote) return false
-            resolver.update(
-                uri,
-                ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) },
-                null,
-                null,
-            )
-            true
-        } catch (e: Exception) {
-            false
+    /**
+     * Saves the last [seconds] of buffered footage to [destination] -- a
+     * SAF ("Storage Access Framework") URI the user picked themselves via
+     * an ACTION_CREATE_DOCUMENT launcher, so the save location is theirs to
+     * choose rather than a fixed Movies/BeOnIt folder. See VoiceSheet's
+     * replay duration menu for how [destination] gets here.
+     */
+    suspend fun saveReplay(context: Context, seconds: Int, destination: Uri): Boolean =
+        withContext(Dispatchers.Default) {
+            val tempFile = muxToTempFile(context, seconds) ?: return@withContext false
+            try {
+                val wrote = context.contentResolver.openOutputStream(destination)?.use { out ->
+                    tempFile.inputStream().use { it.copyTo(out) }
+                }
+                wrote != null
+            } catch (e: Exception) {
+                false
+            } finally {
+                tempFile.delete()
+            }
         }
-    }
 }

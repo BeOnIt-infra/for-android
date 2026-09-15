@@ -537,10 +537,22 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                     AnimatedVisibility(visible = isScreenShared) {
                         val replayAvailable = ReplayBufferRecorder.isAvailable
                         var replayMenuOpen by remember { mutableStateOf(false) }
+                        // Correlates the file the user just picked back to
+                        // which duration they asked for -- the picker's own
+                        // callback only hands back a Uri (or null on cancel).
+                        var pendingReplaySeconds by remember { mutableStateOf<Int?>(null) }
 
-                        fun saveReplay(seconds: Int) {
+                        val saveLocationLauncher = rememberLauncherForActivityResult(
+                            ActivityResultContracts.CreateDocument("video/mp4")
+                        ) { destination: Uri? ->
+                            val seconds = pendingReplaySeconds
+                            pendingReplaySeconds = null
+                            // destination == null means the user backed out
+                            // of the picker -- same as desktop's save dialog,
+                            // a cancel isn't a failure worth a toast.
+                            if (destination == null || seconds == null) return@rememberLauncherForActivityResult
                             scope.launch {
-                                val saved = ReplayBufferRecorder.saveReplay(context, seconds)
+                                val saved = ReplayBufferRecorder.saveReplay(context, seconds, destination)
                                 val messageRes = if (saved) {
                                     R.string.media_viewer_saved
                                 } else {
@@ -549,6 +561,12 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                 Toast.makeText(context, context.getString(messageRes), Toast.LENGTH_SHORT)
                                     .show()
                             }
+                        }
+
+                        fun saveReplay(seconds: Int) {
+                            pendingReplaySeconds = seconds
+                            val stamp = System.currentTimeMillis()
+                            saveLocationLauncher.launch("BeOnIt-Replay-$stamp.mp4")
                         }
 
                         Box(modifier = Modifier.fillMaxWidth()) {
