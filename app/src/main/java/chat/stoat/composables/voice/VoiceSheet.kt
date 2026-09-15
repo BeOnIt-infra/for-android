@@ -40,6 +40,8 @@ import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import io.livekit.android.room.track.VideoTrack
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -137,11 +139,22 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
         // "save last 15 seconds" (below, in the expanded toolbar) has
         // something to save. Same start/stop lifecycle as the presenter
         // overlay above.
-        DisposableEffect(room, isScreenShared) {
-            if (isScreenShared) ReplayBufferRecorder.start(room)
-            onDispose {
-                if (isScreenShared) ReplayBufferRecorder.stop()
+        // The screen-share to keep a replay buffer of: the local one if we're
+        // presenting, otherwise the first remote share in the call. One at a
+        // time on purpose -- a single hardware encoder. Any viewer can save
+        // the share they're watching, not only the presenter.
+        val replayShareTrack: VideoTrack? by remember {
+            derivedStateOf {
+                val shares = trackRefs.filter { it.source == Track.Source.SCREEN_SHARE }
+                val chosen = shares.firstOrNull { it.participant is io.livekit.android.room.participant.LocalParticipant }
+                    ?: shares.firstOrNull()
+                chosen?.publication?.track as? VideoTrack
             }
+        }
+        DisposableEffect(replayShareTrack) {
+            val t = replayShareTrack
+            if (t != null) ReplayBufferRecorder.start(t)
+            onDispose { ReplayBufferRecorder.stop() }
         }
 
         val audioHandler = room.audioSwitchHandler
@@ -534,7 +547,9 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                 }
                             }
                     )
-                    AnimatedVisibility(visible = isScreenShared) {
+                    // Shown whenever a share in the call is buffered, so a
+                    // viewer can save it -- not only while we're presenting.
+                    AnimatedVisibility(visible = ReplayBufferRecorder.isAvailable) {
                         val replayAvailable = ReplayBufferRecorder.isAvailable
                         var replayMenuOpen by remember { mutableStateOf(false) }
                         // Correlates the file the user just picked back to

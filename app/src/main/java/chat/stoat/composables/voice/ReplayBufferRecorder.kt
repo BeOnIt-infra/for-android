@@ -87,11 +87,13 @@ object ReplayBufferRecorder {
     var isAvailable: Boolean by mutableStateOf(false)
         private set
 
-    fun start(room: Room) {
+    // Buffers whichever screen-share this is handed -- local or a remote
+    // participant's -- so a viewer can save the last N seconds of the share
+    // they're watching, not only their own. One encoder at a time (see
+    // VoiceSheet): buffering every remote share at once would need multiple
+    // simultaneous hardware H.264 encoders, which many phones don't have.
+    fun start(videoTrack: VideoTrack) {
         if (handler != null) return
-        val videoTrack =
-            room.localParticipant.getTrackPublication(Track.Source.SCREEN_SHARE)?.track as? VideoTrack
-                ?: return
 
         val thread = HandlerThread("ReplayBufferEncoder").apply { start() }
         handlerThread = thread
