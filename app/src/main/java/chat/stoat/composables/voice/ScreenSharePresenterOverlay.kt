@@ -57,7 +57,8 @@ object ScreenSharePresenterOverlay {
     private enum class Tool { NONE, PEN, LASER }
 
     private data class Point(val x: Float, val y: Float, val time: Long)
-    private data class Stroke(val id: String, val color: Int, val points: MutableList<Point>)
+    /** author: who drew it, so a clear can tell whose marks it may remove. */
+    private data class Stroke(val id: String, val color: Int, val author: String?, val points: MutableList<Point>)
     private data class Laser(val color: Int, val points: MutableList<Point>)
 
     private var windowManager: WindowManager? = null
@@ -154,6 +155,11 @@ object ScreenSharePresenterOverlay {
                         val target = payload.optString("target", null)
                         val me = activeRoom.localParticipant.identity?.value
                         if (target == null || target == me) {
+                            // Author isn't in the payload -- it's the verified
+                            // sender -- and the overlay needs it to scope clears.
+                            event.participant?.identity?.value?.let {
+                                payload.put("author", it)
+                            }
                             view.applyEvent(payload)
                         }
                     }
@@ -262,7 +268,9 @@ object ScreenSharePresenterOverlay {
         bar.addView(
             toolButton(R.drawable.ic_delete_24dp) {
                 val activeRoom = room ?: return@toolButton
+                val myId = activeRoom.localParticipant.identity?.value
                 val event = JSONObject().put("type", "clear")
+                    .apply { myId?.let { put("target", it); put("author", it) } }
                 overlayView?.applyEvent(event)
                 publish(activeRoom, event, reliable = true)
             },
@@ -342,6 +350,7 @@ object ScreenSharePresenterOverlay {
                 val event = JSONObject()
                     .put("type", "stroke_start").put("id", id)
                     .put("color", currentColorHex).put("x", nx.toDouble()).put("y", ny.toDouble())
+                    .apply { activeRoom.localParticipant.identity?.value?.let { put("author", it) } }
                 view.applyEvent(event)
                 publish(activeRoom, event, reliable = true)
             }
@@ -425,6 +434,7 @@ object ScreenSharePresenterOverlay {
                 "stroke_start" -> strokes += Stroke(
                     event.optString("id"),
                     parseColor(event.optString("color", "#ef4444")),
+                    event.optString("author", null),
                     mutableListOf(Point(event.optDouble("x").toFloat(), event.optDouble("y").toFloat(), now)),
                 )
                 "stroke_point" -> strokes.lastOrNull { it.id == event.optString("id") }
@@ -436,7 +446,18 @@ object ScreenSharePresenterOverlay {
                     }
                     laser.points += Point(event.optDouble("x").toFloat(), event.optDouble("y").toFloat(), now)
                 }
-                "clear" -> strokes.clear()
+                // Everything here is aimed at our own share, so a clear from
+                // whoever owns it -- us -- wipes the screen. Anyone else may
+                // only remove what they drew, matching the in-app tiles.
+                "clear" -> {
+                    val author = event.optString("author", null)
+                    val target = event.optString("target", null)
+                    if (author != null && author == target) {
+                        strokes.clear()
+                    } else {
+                        strokes.removeAll { it.author == author }
+                    }
+                }
             }
             invalidate()
         }

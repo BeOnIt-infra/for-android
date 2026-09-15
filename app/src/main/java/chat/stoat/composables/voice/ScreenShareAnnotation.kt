@@ -451,10 +451,18 @@ fun ScreenShareAnnotationOverlay(
             // other people's annotations.
             // Scoped to this share as well as to the sender, so clearing one
             // person's screen doesn't wipe what's drawn on another's.
+            // Whoever's screen is being shared may wipe it clean, marks and
+            // all -- it's their screen. Anyone else clears only what they
+            // drew themselves. Either way it is scoped to one share.
             "clear" -> {
                 val target = event.optString("target", null)
-                strokes = strokes.filter {
-                    it.author != senderId || (target != null && it.target != target)
+                val ownerClearingOwnShare = target != null && target == senderId
+                strokes = strokes.filter { stroke ->
+                    when {
+                        target != null && stroke.target != target -> true
+                        ownerClearingOwnShare -> false
+                        else -> stroke.author != senderId
+                    }
                 }
             }
         }
