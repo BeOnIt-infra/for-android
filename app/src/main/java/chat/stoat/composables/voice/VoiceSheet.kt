@@ -123,6 +123,10 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
         val participants by rememberParticipants(room)
         val trackRefs by rememberTracks(passedRoom = room)
         val isDeafened = VoiceCallManager.isDeafened
+        // Local-only: whoever opens the panel joins the same shared board
+        // (synced over the data channel in Whiteboard.kt), same as choosing
+        // not to look at a share -- there's no room-wide state to agree on.
+        var showWhiteboard by remember { mutableStateOf(false) }
 
         // ScreenSharePresenterOverlay draws straight onto the presenter's real
         // screen, which puts its strokes in the capture too — see
@@ -174,6 +178,14 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
         }
 
         Column {
+            if (showWhiteboard) {
+                WhiteboardView(
+                    room = room,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                )
+            } else {
             LazyColumn(
                 modifier = Modifier
                     // don't push the toolbar off-screen
@@ -368,6 +380,7 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                     }
                 }
             }
+            }
 
             AnimatedVisibility(VoiceCallManager.errorResource != null) {
                 VoiceCallManager.errorResource?.let { resId ->
@@ -546,6 +559,31 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                     }
                                 }
                             }
+                    )
+                    ListItem(
+                        colors = ListItemDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            headlineColor = if (showWhiteboard) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                ListItemDefaults.colors().contentColor
+                            },
+                            leadingIconColor = if (showWhiteboard) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                ListItemDefaults.colors().leadingContentColor
+                            }
+                        ),
+                        headlineContent = { Text(stringResource(R.string.voice_action_whiteboard)) },
+                        leadingContent = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_edit_24dp),
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.extraSmall)
+                            .clickable { showWhiteboard = !showWhiteboard }
                     )
                     // Shown whenever a share in the call is buffered, so a
                     // viewer can save it -- not only while we're presenting.
