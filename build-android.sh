@@ -50,7 +50,7 @@ if [ -n "$APK_PATH" ] && [ -f "$APK_PATH" ]; then
     
     echo "=========================================="
     echo " Android App deployed to downloads site!"
-    echo " Direct download: https://stoat.178.104.95.94.nip.io/BeOnIt.apk (or downloads page)"
+    echo " Direct download: https://download.beonit.xyz/BeOnIt.apk"
     echo "=========================================="
 else
     echo "Error: APK not found after build!"

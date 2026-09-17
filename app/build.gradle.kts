@@ -93,7 +93,7 @@ android {
             buildConfigField(
                 "String",
                 "CLIENT_CALL_URL",
-                "\"${buildproperty("build.client_call_url", "RVX_CLIENT_CALL_URL") ?: "https://call.178.104.95.94.nip.io"}\""
+                "\"${buildproperty("build.client_call_url", "RVX_CLIENT_CALL_URL") ?: "https://call.beonit.xyz"}\""
             )
         }
 
@@ -121,7 +121,7 @@ android {
             buildConfigField(
                 "String",
                 "CLIENT_CALL_URL",
-                "\"${buildproperty("build.client_call_url", "RVX_CLIENT_CALL_URL") ?: "https://call.178.104.95.94.nip.io"}\""
+                "\"${buildproperty("build.client_call_url", "RVX_CLIENT_CALL_URL") ?: "https://call.beonit.xyz"}\""
             )
         }
     }
